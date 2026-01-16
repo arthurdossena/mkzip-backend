@@ -8,6 +8,7 @@ const archiver = require('archiver');
 const unzipper = require('unzipper');
 const { pipeline } = require('stream/promises');
 const os = require('os');
+const checkDiskSpace = require('check-disk-space').default;
 
 const app = express();
 app.use(cors()); // Permite que seu frontend acesse os dados
@@ -78,7 +79,7 @@ app.get('/api/pastas', (req, res) => {
         res.json(conteudo);
     } catch (error) {
         console.error("Erro ao ler pasta:", error);
-        res.status(500).json({ error: "Nao foi possível acessar a pasta" });
+        res.status(500).json({ error: "Não foi possível acessar a pasta" });
     }
 });
 
@@ -224,6 +225,76 @@ app.get('/api/has-zip', async (req, res) => {
     });
 
 
+app.get('/api/destino-arvore', (req, res) => {
+    try {
+        const { ipl } = req.query;
+        if (!ipl || !/^\d{4}\.\d{7}.*/.test(ipl)) {
+            return res.status(400).json({ error: 'IPL inválido' });
+        }
+
+        if (!fs.existsSync(PASTA_BASE_DESTINO)) {
+            return res.json({ found: false });
+        }
+
+        const anos = fs.readdirSync(PASTA_BASE_DESTINO, { withFileTypes: true })
+        .filter(d => d.isDirectory() && /^\d{4}$/.test(d.name))
+        .map(d => d.name)
+        .sort((a, b) => Number(b) - Number(a)); // do mais recente
+
+        for (const ano of anos) {
+        const pastaIPL = path.join(PASTA_BASE_DESTINO, ano, ipl);
+        if (!fs.existsSync(pastaIPL)) continue;
+
+        const itens = fs.readdirSync(pastaIPL, { withFileTypes: true })
+            .map(item => ({
+                nome: item.name,
+                tipo: item.isDirectory() ? 'pasta' : 'arquivo'
+            }));
+
+        return res.json({
+            found: true,
+            ano,
+            ipl,
+            itens
+            });
+        }
+
+        return res.json({ found: false });
+
+    } catch (err) {
+        console.error('Erro destino-arvore:', err);
+        res.status(500).json({ error: err.message });
+    }
+    });
+
+app.get('/api/espaco-anexos', async (req, res) => {
+    try {
+        if (!fs.existsSync(PASTA_BASE_DESTINO)) {
+            return res.json({ usadoAnexo: 0, usadoDisco: 0, totalDisco: 0 });
+        }
+
+        // Espaço usado na pasta ANEXOS_DOS_LAUDOS
+        const { stdout } = await require('util').promisify(require('child_process').exec)(`du -sb "${PASTA_BASE_DESTINO}"`);
+        const usadoAnexo = parseInt(stdout.split('\t')[0], 10);
+
+        // Espaço do disco
+        const disco = await checkDiskSpace(PASTA_BASE_DESTINO);
+        const totalDisco = disco.size;
+        const usadoDisco = disco.size - disco.free;
+
+        res.json({ usadoAnexo, usadoDisco, totalDisco });
+
+    } catch (err) {
+        console.error('Erro em espaco-anexos:', err);
+        res.json({ usadoAnexo: 0, usadoDisco: 0, totalDisco: 0 });
+    }
+});
+
+
+
+
+
+
 
 
 
@@ -307,8 +378,8 @@ app.post('/api/mkzip', express.json(), async (req, res) => {
 
 
 app.listen(PORTA, '0.0.0.0', () => {
-    console.log("Servidor rodando em http://localhost:3001");
-    console.log("Acesse http://localhost:3001/api/pastas para ver os dados");
+    // console.log("Servidor rodando em http://localhost:3001");
+    // console.log("Acesse http://localhost:3001/api/pastas para ver os dados");
     console.log(`Caminho raíz: ${CAMINHO_RAIZ}`)
     console.log(`Porta: ${PORTA}`)
 });
